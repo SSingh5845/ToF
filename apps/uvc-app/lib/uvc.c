@@ -26,7 +26,7 @@
 #include "../tof-sdk-interface.h"
 
 #define MAX_PACKET_SIZE 60
-
+#define ENABLE_USB_REQUEST_DEBUG 
 #ifdef ENABLE_USB_REQUEST_DEBUG
 #define USB_REQ_DEBUG(X...)                                                    \
     {                                                                          \
@@ -37,8 +37,12 @@
 #define USB_REQ_DEBUG(X...)
 #endif
 
+static void uvc_windows_commands(uint16_t cmds,const char *in_buf, const size_t in_len,
+                         char **out_buf, size_t *out_len);
+
 struct buffer {
-    char *data;
+    uint8_t *data;
+    // char *data;
     size_t len;
 };
 
@@ -170,7 +174,7 @@ static void uvc_events_process_extension_unit(struct uvc_device *dev,
                                               uint16_t len,
                                               struct uvc_request_data *resp) {
     static int server_resp_bytes_sent;
-    static bool resp_len_sent = false;
+    static bool resp_len_sent = true;
 
     USB_REQ_DEBUG("extension unit request (req %02x cs %02x)\n", req, cs);
 
@@ -393,7 +397,8 @@ static void uvc_events_process_data(struct uvc_device *dev,
         (const struct uvc_streaming_control *)&data->data;
     struct uvc_streaming_control *target;
     static size_t client_req_bytes_read;
-    static bool blob_len_read = false;
+    static bool blob_len_read = true;
+    static u_int16_t commds;
 
     switch (dev->control) {
     case UVC_VS_PROBE_CONTROL:
@@ -410,31 +415,42 @@ static void uvc_events_process_data(struct uvc_device *dev,
         USB_REQ_DEBUG("getting extension unit, length = %d\n", data->length);
         //Store the client request string sent from remote
         if (blob_len_read) {
+            dev ->in_buf.len = data ->data[0];
+            dev->in_buf.data = (char *)malloc(dev->in_buf.len); 
+            client_req_bytes_read = 0;
+            blob_len_read = true;
+            printf("The input buffer has been created.");
+            fflush(stdout);
             // Read one packet and append
             size_t remaining_bytes_to_read =
                 dev->in_buf.len - client_req_bytes_read;
             size_t packet_size = (remaining_bytes_to_read > MAX_PACKET_SIZE)
                                      ? MAX_PACKET_SIZE
                                      : remaining_bytes_to_read;
-            memcpy(dev->in_buf.data + client_req_bytes_read, data->data,
+                                     
+            memcpy(dev->in_buf.data + client_req_bytes_read, data->data+1,
                    packet_size);
             client_req_bytes_read += packet_size;
             remaining_bytes_to_read -= packet_size;
 
             if (remaining_bytes_to_read == 0) {
-                //process received data
-                handleClientRequest(dev->in_buf.data, dev->in_buf.len, &dev->out_buf.data, &dev->out_buf.len);
-                // reset to default
+
+                commds = dev->in_buf.data[0];
+                
+                uvc_windows_commands(commds,dev->in_buf.data,dev->in_buf.len,&dev->out_buf.data,&dev->out_buf.len);
                 free(dev->in_buf.data);
                 dev->in_buf.len = 0;
                 client_req_bytes_read = 0;
                 blob_len_read = false;
             }
         } else {
-            dev->in_buf.len = *(size_t *)data->data;
+            // dev->in_buf.len = *(size_t *)data->data;
+            dev ->in_buf.len = data ->data[0];
             dev->in_buf.data = (char *)malloc(dev->in_buf.len); 
             client_req_bytes_read = 0;
             blob_len_read = true;
+            printf("The input buffer has been created.");
+            fflush(stdout);
         }
         return;
 
@@ -475,6 +491,45 @@ static void uvc_events_process_data(struct uvc_device *dev,
         uvc_stream_set_frame_rate(dev->stream, fps);
     }
 }
+static void uvc_windows_commands(uint16_t cmds,const char *in_buf, const size_t in_len,
+                         char **out_buf, size_t *out_len)
+    {
+        char ver[15] = "ver-4.3.0";
+
+        // the input buffer first  value contains command address, therefore for data use the buffer from the second value
+
+        switch (cmds)
+        {
+        case UVC_EU_PROGRAM_AFE:
+            printf("%d\n",in_buf[1]);
+            printf("got the first value in the input buffer");
+            break;
+        
+        case UVC_EU_SET_FPS:
+            printf("%d\n",in_buf[1]);
+            printf("got the first value in the input buffer");
+            fflush(stdout);
+            break;
+
+        case UVC_EU_SET_READ_ADDR:
+            printf("%d\n",in_buf[1]);
+            printf("got the first value in the input buffer");
+            fflush(stdout);
+            break;
+
+        case UVC_EU_GET_VER_NUM:
+            *out_buf = (char *)malloc(sizeof(ver));
+            memcpy(*out_buf, ver, sizeof(ver));
+            *out_len = sizeof(ver);
+            break;
+        
+        default:
+            printf("No Commands have been found.");
+            fflush(stdout);
+            break;
+        }
+        
+    }
 
 static void uvc_events_process(void *d) {
     struct uvc_device *dev = d;
